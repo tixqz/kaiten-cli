@@ -26,6 +26,11 @@ var rootCmd = &cobra.Command{
 	Version: Version,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		var err error
+		if isLocalOnlyCommand(cmd) {
+			cfg, err = config.LoadLocal()
+			return err
+		}
+
 		cfg, err = config.Load()
 		if err != nil {
 			return err
@@ -54,6 +59,19 @@ func init() {
 	rootCmd.AddCommand(membersCmd)
 	rootCmd.AddCommand(tagsCmd)
 	rootCmd.AddCommand(checklistsCmd)
+	rootCmd.AddCommand(syncCmd)
+	rootCmd.AddCommand(dbCmd)
+	rootCmd.AddCommand(searchCmd)
+}
+
+func isLocalOnlyCommand(cmd *cobra.Command) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		switch c.Name() {
+		case "db", "search":
+			return true
+		}
+	}
+	return false
 }
 
 // outputJSON marshals v to indented JSON and prints to stdout.

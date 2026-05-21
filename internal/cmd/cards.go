@@ -2,10 +2,13 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"gitlab.life-pay.ru/ai/kaiten-cli/internal/api"
+	"gitlab.life-pay.ru/ai/kaiten-cli/internal/output"
 )
 
 var cardsCmd = &cobra.Command{
@@ -31,12 +34,48 @@ var cardsListCmd = &cobra.Command{
 		if all, _ := cmd.Flags().GetBool("all"); all {
 			condition = 0
 		}
-		cards, err := apiClient.ListCards(boardID, condition)
+
+		limit, _ := cmd.Flags().GetInt("limit")
+		offset, _ := cmd.Flags().GetInt("offset")
+		allPages, _ := cmd.Flags().GetBool("all-pages")
+
+		opts := api.ListCardsOptions{
+			BoardID:   boardID,
+			Condition: condition,
+			Limit:     limit,
+			Offset:    offset,
+		}
+
+		var cards []api.Card
+		if allPages {
+			cards, err = apiClient.ListCardsAllPages(opts)
+		} else {
+			cards, err = apiClient.ListCardsWithOptions(opts)
+		}
 		if err != nil {
 			return err
 		}
-		outputJSON(cards)
-		return nil
+
+		outputFormat, _ := cmd.Flags().GetString("output")
+		fieldsStr, _ := cmd.Flags().GetString("fields")
+		noDescriptions, _ := cmd.Flags().GetBool("no-descriptions")
+		quiet, _ := cmd.Flags().GetBool("quiet")
+
+		var fields []string
+		if fieldsStr != "" {
+			for _, f := range strings.Split(fieldsStr, ",") {
+				f = strings.TrimSpace(f)
+				if f != "" {
+					fields = append(fields, f)
+				}
+			}
+		}
+
+		return output.Format(os.Stdout, cards, outputFormat, output.Options{
+			Fields:         fields,
+			NoDescriptions: noDescriptions,
+			Quiet:          quiet,
+		})
 	},
 }
 
@@ -251,6 +290,13 @@ func init() {
 	cardsListCmd.Flags().Int("board-id", 0, "Board ID (required)")
 	cardsListCmd.Flags().Bool("archived", false, "Show archived cards instead of active")
 	cardsListCmd.Flags().Bool("all", false, "Show all cards (active + archived)")
+	cardsListCmd.Flags().Int("limit", 0, "Maximum number of cards to return")
+	cardsListCmd.Flags().Int("offset", 0, "Number of cards to skip")
+	cardsListCmd.Flags().Bool("all-pages", false, "Fetch all pages via API pagination (default page size 100)")
+	cardsListCmd.Flags().String("output", "json", "Output format: json, jsonl, yaml, table, csv")
+	cardsListCmd.Flags().String("fields", "", "Comma-separated list of fields to include")
+	cardsListCmd.Flags().Bool("no-descriptions", false, "Exclude description fields from output")
+	cardsListCmd.Flags().BoolP("quiet", "q", false, "Print only card IDs")
 	cardsListCmd.MarkFlagRequired("board-id")
 
 	// create flags

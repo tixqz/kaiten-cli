@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 )
 
@@ -556,6 +557,266 @@ func TestMembers(t *testing.T) {
 		}
 		if members[0].FullName != "John Doe" || members[0].Username != "johndoe" {
 			t.Fatalf("unexpected member: %+v", members[0])
+		}
+	})
+}
+
+func TestListCardsWithOptions(t *testing.T) {
+	t.Run("sends query params", func(t *testing.T) {
+		handler := func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				t.Fatalf("expected GET, got %s", r.Method)
+			}
+			q := r.URL.Query()
+			if q.Get("board_id") != "7" {
+				t.Fatalf("expected board_id=7, got %s", q.Get("board_id"))
+			}
+			if q.Get("condition") != "1" {
+				t.Fatalf("expected condition=1, got %s", q.Get("condition"))
+			}
+			if q.Get("limit") != "50" {
+				t.Fatalf("expected limit=50, got %s", q.Get("limit"))
+			}
+			if q.Get("offset") != "10" {
+				t.Fatalf("expected offset=10, got %s", q.Get("offset"))
+			}
+			if q.Get("owner_id") != "42" {
+				t.Fatalf("expected owner_id=42, got %s", q.Get("owner_id"))
+			}
+			if q.Get("member_id") != "99" {
+				t.Fatalf("expected member_id=99, got %s", q.Get("member_id"))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"id":1,"title":"Card","board_id":7}]`))
+		}
+		client, server := newTestClient(handler)
+		defer server.Close()
+
+		opts := ListCardsOptions{BoardID: 7, Condition: 1, Limit: 50, Offset: 10, OwnerID: 42, MemberID: 99}
+		cards, err := client.ListCardsWithOptions(opts)
+		if err != nil {
+			t.Fatalf("ListCardsWithOptions returned error: %v", err)
+		}
+		if len(cards) != 1 || cards[0].BoardID != 7 {
+			t.Fatalf("unexpected cards: %+v", cards)
+		}
+	})
+
+	t.Run("omits zero-value params", func(t *testing.T) {
+		handler := func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				t.Fatalf("expected GET, got %s", r.Method)
+			}
+			q := r.URL.Query()
+			if q.Get("board_id") != "5" {
+				t.Fatalf("expected board_id=5, got %s", q.Get("board_id"))
+			}
+			if q.Get("condition") != "" {
+				t.Fatalf("condition should be omitted, got %s", q.Get("condition"))
+			}
+			if q.Get("limit") != "" {
+				t.Fatalf("limit should be omitted, got %s", q.Get("limit"))
+			}
+			if q.Get("offset") != "" {
+				t.Fatalf("offset should be omitted, got %s", q.Get("offset"))
+			}
+			_, _ = w.Write([]byte(`[]`))
+		}
+		client, server := newTestClient(handler)
+		defer server.Close()
+
+		_, err := client.ListCardsWithOptions(ListCardsOptions{BoardID: 5})
+		if err != nil {
+			t.Fatalf("ListCardsWithOptions returned error: %v", err)
+		}
+	})
+}
+
+func TestCardExpandedFields(t *testing.T) {
+	t.Run("unmarshal expanded fields", func(t *testing.T) {
+		jsonData := `[
+  {
+    "id": 100,
+    "title": "Expanded Card",
+    "board_id": 3,
+    "column_id": 5,
+    "owner_id": 10,
+    "updater_id": 20,
+    "completed_at": "2024-06-01T12:00:00Z",
+    "column_changed_at": "2024-06-01T11:00:00Z",
+    "comments_total": 7,
+    "tag_ids": [1, 2, 3],
+    "sprint_id": 15,
+    "sort_order": 500
+  }
+]`
+		handler := func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(jsonData))
+		}
+		client, server := newTestClient(handler)
+		defer server.Close()
+
+		cards, err := client.ListCardsWithOptions(ListCardsOptions{BoardID: 3})
+		if err != nil {
+			t.Fatalf("ListCardsWithOptions returned error: %v", err)
+		}
+		if len(cards) != 1 {
+			t.Fatalf("expected 1 card, got %d", len(cards))
+		}
+		c := cards[0]
+		if c.ID != 100 || c.Title != "Expanded Card" {
+			t.Fatalf("basic fields mismatch: %+v", c)
+		}
+		if c.OwnerID == nil || *c.OwnerID != 10 {
+			t.Fatalf("OwnerID expected 10, got %+v", c.OwnerID)
+		}
+		if c.UpdaterID == nil || *c.UpdaterID != 20 {
+			t.Fatalf("UpdaterID expected 20, got %+v", c.UpdaterID)
+		}
+		if c.CompletedAt == nil || *c.CompletedAt != "2024-06-01T12:00:00Z" {
+			t.Fatalf("CompletedAt mismatch: %+v", c.CompletedAt)
+		}
+		if c.ColumnChangedAt == nil || *c.ColumnChangedAt != "2024-06-01T11:00:00Z" {
+			t.Fatalf("ColumnChangedAt mismatch: %+v", c.ColumnChangedAt)
+		}
+		if c.CommentsTotal == nil || *c.CommentsTotal != 7 {
+			t.Fatalf("CommentsTotal expected 7, got %+v", c.CommentsTotal)
+		}
+		if len(c.TagIDs) != 3 || c.TagIDs[0] != 1 || c.TagIDs[1] != 2 || c.TagIDs[2] != 3 {
+			t.Fatalf("TagIDs expected [1 2 3], got %v", c.TagIDs)
+		}
+		if c.SprintID == nil || *c.SprintID != 15 {
+			t.Fatalf("SprintID expected 15, got %+v", c.SprintID)
+		}
+		if c.SortOrder == nil || *c.SortOrder != 500 {
+			t.Fatalf("SortOrder expected 500, got %+v", c.SortOrder)
+		}
+	})
+
+	t.Run("raw json populated", func(t *testing.T) {
+		jsonData := `[{"id":1,"title":"Raw","board_id":2,"column_id":3}]`
+		handler := func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(jsonData))
+		}
+		client, server := newTestClient(handler)
+		defer server.Close()
+
+		cards, err := client.ListCardsWithOptions(ListCardsOptions{BoardID: 2})
+		if err != nil {
+			t.Fatalf("ListCardsWithOptions returned error: %v", err)
+		}
+		if len(cards) != 1 {
+			t.Fatalf("expected 1 card, got %d", len(cards))
+		}
+		if cards[0].RawJSON != jsonData[1:len(jsonData)-1] {
+			t.Fatalf("RawJSON mismatch:\nexpected: %s\ngot: %s", jsonData, cards[0].RawJSON)
+		}
+	})
+
+	t.Run("raw json via GetCard", func(t *testing.T) {
+		jsonData := `{"id":1,"title":"Single","board_id":2,"column_id":3}`
+		handler := func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(jsonData))
+		}
+		client, server := newTestClient(handler)
+		defer server.Close()
+
+		card, err := client.GetCard(1)
+		if err != nil {
+			t.Fatalf("GetCard returned error: %v", err)
+		}
+		if card.RawJSON != jsonData {
+			t.Fatalf("RawJSON mismatch:\nexpected: %s\ngot: %s", jsonData, card.RawJSON)
+		}
+	})
+}
+
+func TestListCardsAllPages(t *testing.T) {
+	t.Run("fetches single page when results < limit", func(t *testing.T) {
+		callCount := 0
+		handler := func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"id":1,"title":"A","board_id":2,"column_id":3}]`))
+		}
+		client, server := newTestClient(handler)
+		defer server.Close()
+
+		cards, err := client.ListCardsAllPages(ListCardsOptions{BoardID: 2, Limit: 100})
+		if err != nil {
+			t.Fatalf("ListCardsAllPages returned error: %v", err)
+		}
+		if len(cards) != 1 {
+			t.Fatalf("expected 1 card, got %d", len(cards))
+		}
+		if callCount != 1 {
+			t.Fatalf("expected 1 call, got %d", callCount)
+		}
+	})
+
+	t.Run("fetches multiple pages", func(t *testing.T) {
+		callCount := 0
+		handler := func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			q := r.URL.Query()
+			offset, _ := strconv.Atoi(q.Get("offset"))
+			w.Header().Set("Content-Type", "application/json")
+			switch callCount {
+			case 1:
+				if offset != 0 {
+					t.Fatalf("expected offset=0 on first call, got %d", offset)
+				}
+				_, _ = w.Write([]byte(`[{"id":1},{"id":2},{"id":3}]`))
+			case 2:
+				if offset != 3 {
+					t.Fatalf("expected offset=3 on second call, got %d", offset)
+				}
+				_, _ = w.Write([]byte(`[{"id":4}]`))
+			default:
+				t.Fatalf("unexpected call #%d", callCount)
+			}
+		}
+		client, server := newTestClient(handler)
+		defer server.Close()
+
+		cards, err := client.ListCardsAllPages(ListCardsOptions{BoardID: 2, Limit: 3})
+		if err != nil {
+			t.Fatalf("ListCardsAllPages returned error: %v", err)
+		}
+		if len(cards) != 4 {
+			t.Fatalf("expected 4 cards, got %d", len(cards))
+		}
+		if callCount != 2 {
+			t.Fatalf("expected 2 calls, got %d", callCount)
+		}
+	})
+
+	t.Run("default limit is 100", func(t *testing.T) {
+		callCount := 0
+		handler := func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			q := r.URL.Query()
+			if q.Get("limit") != "100" {
+				t.Fatalf("expected limit=100 by default, got %s", q.Get("limit"))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"id":1}]`))
+		}
+		client, server := newTestClient(handler)
+		defer server.Close()
+
+		cards, err := client.ListCardsAllPages(ListCardsOptions{BoardID: 2})
+		if err != nil {
+			t.Fatalf("ListCardsAllPages returned error: %v", err)
+		}
+		if len(cards) != 1 {
+			t.Fatalf("expected 1 card, got %d", len(cards))
+		}
+		if callCount != 1 {
+			t.Fatalf("expected 1 call, got %d", callCount)
 		}
 	})
 }

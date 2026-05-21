@@ -1,6 +1,13 @@
 # kaiten-cli
 
-Консольный клиент для [Kaiten](https://kaiten.ru/) — системы управления проектами. Позволяет управлять пространствами, досками, колонками, дорожками и карточками через командную строку. Эффективен для использования ИИ-агентами. Почему kaiten до сих пор не сделали свой, кстати? Написан полностью в соответствии с их [API](https://developers.kaiten.ru/).
+Консольный клиент для [Kaiten](https://kaiten.ru/) — системы управления проектами. Позволяет управлять пространствами, досками, колонками, дорожками и карточками через командную строку.
+
+По умолчанию команды возвращают JSON. Для `cards list`, `search cards` и `sync` доступны форматы `json`, `jsonl`, `table`, `yaml`, `csv`; JSONL удобен для больших выгрузок и AI-agent workflows. `--fields`, `--no-descriptions` и `--quiet/-q` поддерживаются в карточных командах `cards list` и `search cards`.
+
+## Требования
+
+- Go 1.23+
+- Аккаунт Kaiten с API-токеном
 
 ## Установка
 
@@ -27,16 +34,19 @@ make cross-build
 
 ## Настройка
 
-Конфигурация через переменные окружения (обе обязательны):
+Конфигурация через переменные окружения:
 
 | Переменная | Описание | Пример |
 |---|---|---|
 | `KAITEN_API_TOKEN` | API-токен Kaiten | `Токен из настроек Kaiten` |
 | `KAITEN_URL` | URL вашего Kaiten | `https://mycompany.kaiten.ru` |
+| `KAITEN_DB_PATH` | Путь к локальной SQLite БД | `~/.kaiten/kaiten.db` |
 
 ```bash
 export KAITEN_API_TOKEN="ваш-токен"
 export KAITEN_URL="https://mycompany.kaiten.ru"
+# Опционально; по умолчанию ~/.kaiten/kaiten.db
+export KAITEN_DB_PATH="$HOME/.kaiten/kaiten.db"
 ```
 
 ## Использование
@@ -87,6 +97,15 @@ kaiten cards list --board-id 456 --archived
 # Все карточки (активные + архивные)
 kaiten cards list --board-id 456 --all
 
+# Компактный список из live API: первые 50 карточек, только нужные поля, без описаний
+kaiten cards list --board-id 456 --limit 50 \
+  --fields id,title,condition,updated,completed_at \
+  --no-descriptions --output table
+
+# Все страницы API в JSONL для потоковой обработки
+kaiten cards list --board-id 456 --all-pages --output jsonl \
+  --fields id,title,board_id,updated
+
 # Получить карточку по ID
 kaiten cards get 789
 
@@ -127,6 +146,58 @@ kaiten cards archive 789
 # Разархивировать карточку
 kaiten cards unarchive 789
 ```
+
+### Локальная SQLite БД и синхронизация
+
+`kaiten sync` загружает данные из Kaiten в локальную SQLite БД. Для синхронизации нужен ровно один scope: `--board-id`, `--space-id` или `--all`.
+
+```bash
+# Начальная синхронизация одной доски
+kaiten sync --board-id 456
+
+# Синхронизация всех досок пространства
+kaiten sync --space-id 123
+
+# Синхронизация всех доступных данных
+kaiten sync --all
+
+# Проверить состояние БД
+kaiten db status
+
+# Освободить место после больших обновлений/удалений
+kaiten db vacuum
+
+# Полностью удалить локальную БД (без интерактива, для автоматизации)
+kaiten db reset --yes
+```
+
+### Локальный поиск карточек
+
+`kaiten search cards` ищет только в локальной SQLite БД и не делает API-вызовов. Перед поиском выполните `kaiten sync`.
+
+```bash
+# Карточки, завершённые в прошлом году конкретным участником; JSONL + короткий набор полей
+kaiten search cards \
+  --member-id 100 \
+  --completed-from 2025-01-01 \
+  --completed-to 2025-12-31 \
+  --condition done \
+  --fields id,title,board_id,completed_at,owner_id \
+  --output jsonl
+
+# То же по владельцу карточки
+kaiten search cards \
+  --owner-id 100 \
+  --completed-from 2025-01-01 \
+  --completed-to 2025-12-31 \
+  --fields id,title,completed_at \
+  --output jsonl
+
+# Текстовый поиск по локальной БД
+kaiten search cards --text "авторизация" --board-id 456 --limit 20 --output table
+```
+
+Фильтры поиска: `--text`, `--board-id`, `--space-id`, `--owner-id`, `--member-id`, `--tag-id`, `--condition`, `--created-from/to`, `--updated-from/to`, `--completed-from/to`, `--limit`, `--offset`, `--sort`.
 
 ### Комментарии (comments)
 
@@ -237,7 +308,25 @@ kaiten checklists delete --card-id 789 --checklist-id 111
 
 ## Формат вывода
 
-Все команды возвращают JSON с отступами. Пример:
+По умолчанию команды возвращают JSON с отступами. Для `cards list`, `search cards` и `sync` можно выбрать формат:
+
+```bash
+kaiten search cards --board-id 456 --output jsonl
+kaiten search cards --board-id 456 --output table --fields id,title,condition
+kaiten cards list --board-id 456 --quiet
+kaiten cards list --board-id 456 --no-descriptions
+```
+
+Доступные output controls для `cards list` и `search cards`:
+
+- `--output json|jsonl|table|yaml|csv`
+- `--fields id,title,...` — оставить только нужные поля
+- `--no-descriptions` — исключить поля описаний
+- `--quiet`, `-q` — вывести только ID карточек, по одному в строке
+
+Для `sync` доступен выбор формата через `--output` / `-o`.
+
+Пример JSON:
 
 ```json
 {
@@ -271,6 +360,54 @@ kaiten cards list --board-id 456 | jq '[.[] | select(.column_id == 10)]'
 | 404 | Ресурс не найден |
 | 429 | Превышен лимит запросов (5 запросов/сек) |
 
+## Структура проекта
+
+```
+├── main.go                     # Точка входа
+├── Makefile                    # Сборка и линтинг
+├── .goreleaser.yml             # Конфигурация релизов
+├── go.mod / go.sum             # Зависимости
+└── internal/
+    ├── config/
+    │   └── config.go           # Чтение KAITEN_API_TOKEN, KAITEN_URL и KAITEN_DB_PATH
+    ├── api/
+    │   ├── client.go           # HTTP-клиент с авторизацией
+    │   ├── spaces.go           # API пространств
+    │   ├── boards.go           # API досок
+    │   ├── columns.go          # API колонок
+    │   ├── lanes.go            # API дорожек
+    │   ├── cards.go            # API карточек
+    │   ├── comments.go         # API комментариев
+    │   ├── blockers.go         # API блокировок
+    │   ├── tags.go             # API тегов
+    │   ├── members.go          # API участников
+    │   └── checklists.go       # API чеклистов
+    ├── db/                     # Локальная SQLite БД и поисковые запросы
+    ├── output/                 # Форматы вывода и выбор полей
+    ├── syncer/                 # Синхронизация Kaiten → SQLite
+    └── cmd/
+        ├── root.go             # Корневая команда
+        ├── spaces.go           # Команды пространств
+        ├── boards.go           # Команды досок
+        ├── columns.go          # Команды колонок
+        ├── lanes.go            # Команды дорожек
+        ├── cards.go            # Команды карточек
+        ├── comments.go         # Команды комментариев
+        ├── blockers.go         # Команды блокировок
+        ├── tags.go             # Команды тегов
+        ├── members.go          # Команды участников
+        ├── checklists.go       # Команды чеклистов
+        ├── sync.go             # Команда sync
+        ├── search.go           # Локальный поиск
+        ├── db.go               # Управление локальной БД
+        └── resolve.go          # Резолвинг имён в ID
+```
+
+## Ограничения текущей версии
+
+- Нет назначения участников на карточки (только просмотр)
+- Локальный поиск работает по последнему состоянию после `kaiten sync`
+- API-клиент ограничивает запросы до 5 req/s и повторяет 429/5xx
 
 ## Разработка
 
@@ -287,3 +424,7 @@ make lint
 # Очистка
 make clean
 ```
+
+## Лицензия
+
+Внутренний проект [Life Pay](https://life-pay.ru/).
